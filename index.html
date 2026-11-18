@@ -71,7 +71,7 @@
             <h1 class="text-base font-semibold tracking-tight truncate">用电管家</h1>
             <span id="demoBadge" class="hidden text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 shrink-0">示例数据</span>
           </div>
-          <p class="text-[11px] text-neutral-500 truncate">YM-S1-BES 蓝牙计量统计</p>
+          <p class="text-[11px] text-neutral-500 truncate">YD-S1-BE / YM-S1-BES 蓝牙计量统计</p>
         </div>
       </div>
       <div class="flex items-center gap-1.5 shrink-0">
@@ -159,17 +159,24 @@
       <div class="glass-card rounded-2xl p-3.5 space-y-2">
         <div class="flex items-center justify-between">
           <div>
-            <h3 class="text-xs font-semibold text-neutral-800">YM-S1-BES 协议调试面板</h3>
-            <p class="text-[11px] text-neutral-500">Service: 49535343-fe7d... · 自动执行 XOR 0xF0 解码</p>
+            <h3 class="text-xs font-semibold text-neutral-800">YD-S1-BE 协议调试面板</h3>
+            <p class="text-[11px] text-neutral-500">Service: 49535343-fe7d... · 自动分包重组与 XOR 0x56 解码</p>
           </div>
-          <button id="btnCopyPacket" type="button" class="text-[11px] px-2.5 py-1 rounded-full bg-neutral-100 hover:bg-neutral-200 text-neutral-700 font-medium">
-            复制数据包
-          </button>
+          <div class="flex items-center gap-1.5 shrink-0">
+            <label class="text-[11px] px-2.5 py-1 rounded-full bg-emerald-50 hover:bg-emerald-100 text-emerald-700 font-medium cursor-pointer">
+              解析 .cfa 日志
+              <input id="inputCfaFile" type="file" accept=".cfa,.log,*/*" class="hidden" />
+            </label>
+            <button id="btnCopyPacket" type="button" class="text-[11px] px-2.5 py-1 rounded-full bg-neutral-100 hover:bg-neutral-200 text-neutral-700 font-medium">
+              复制数据包
+            </button>
+          </div>
         </div>
         <div class="bg-neutral-900 text-neutral-100 rounded-xl p-3 text-[11px] mono space-y-1.5 overflow-x-auto">
-          <div><span class="text-neutral-400">发送指令:</span> 07 06 EB E8 BE B6 BE DF B1</div>
+          <div><span class="text-neutral-400">发送指令:</span> AB AA 47 44 9D 95 9D 46 17</div>
           <div><span class="text-neutral-400">原始 HEX:</span> <span id="rawHexOutput">等待蓝牙通知...</span></div>
-          <div><span class="text-emerald-400">XOR 0xF0:</span> <span id="decodedHexOutput">--</span></div>
+          <div><span class="text-emerald-400">XOR 0x56:</span> <span id="decodedHexOutput">--</span></div>
+          <div id="cfaResultBox" class="hidden pt-2 border-t border-neutral-800 space-y-1 max-h-48 overflow-y-auto"></div>
         </div>
       </div>
     </section>
@@ -390,7 +397,7 @@
       const BLE_SERVICE_UUID = '49535343-fe7d-4ae5-8fa9-9fafd205e455';
       const BLE_NOTIFY_UUID = '49535343-1e4d-bd9-ba61-23c647249616';
       const BLE_WRITE_UUID = '49535343-8841-43f4-a8d4-ecbe34729bb3';
-      const READ_COMMAND = new Uint8Array([0x07, 0x06, 0xEB, 0xE8, 0xBE, 0xB6, 0xBE, 0xDF, 0xB1]);
+      const READ_COMMAND = new Uint8Array([0xAB, 0xAA, 0x47, 0x44, 0x9D, 0x95, 0x9D, 0x46, 0x17]);
 
       let kwhChartInstance = null;
       let costChartInstance = null;
@@ -894,28 +901,35 @@
           addLog('BLE', '已订阅通知特征值，准备发送读取指令...');
 
           const packetPromise = new Promise((resolve, reject) => {
+            let chunks = [];
+            let totalLen = 0;
             const timer = setTimeout(() => {
               notifyChar.removeEventListener('characteristicvaluechanged', onNotify);
-              reject(new Error('读取通知超时（5秒），请确认手机微信小程序未占用插座连接'));
-            }, 5000);
+              if (totalLen > 0) {
+                const merged = new Uint8Array(totalLen);
+                let pos = 0;
+                for (const c of chunks) { merged.set(c, pos); pos += c.length; }
+                resolve(merged);
+              } else {
+                reject(new Error('读取通知超时（6秒），请确认手机微信小程序未占用插座连接'));
+              }
+            }, 6000);
 
             function onNotify(event) {
               const value = event.target.value;
-              const rawBytes = new Uint8Array(value.buffer);
-              const decodedBytes = rawBytes.map(b => b ^ 0xF0);
+              const part = new Uint8Array(value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength));
+              chunks.push(part);
+              totalLen += part.length;
+              addLog('BLE', `收到分包 (${part.length}B): ${toHex(part)}`);
 
-              lastRawHex = toHex(rawBytes);
-              lastDecodedHex = toHex(decodedBytes);
-
-              document.getElementById('rawHexOutput').textContent = lastRawHex;
-              document.getElementById('decodedHexOutput').textContent = lastDecodedHex;
-
-              addLog('BLE', `收到原始包: ${lastRawHex}`);
-              addLog('BLE', `XOR 0xF0 解码: ${lastDecodedHex}`);
-
-              clearTimeout(timer);
-              notifyChar.removeEventListener('characteristicvaluechanged', onNotify);
-              resolve({ rawBytes, decodedBytes });
+              if (totalLen >= 38) {
+                clearTimeout(timer);
+                notifyChar.removeEventListener('characteristicvaluechanged', onNotify);
+                const merged = new Uint8Array(totalLen);
+                let pos = 0;
+                for (const c of chunks) { merged.set(c, pos); pos += c.length; }
+                resolve(merged);
+              }
             }
             notifyChar.addEventListener('characteristicvaluechanged', onNotify);
           });
@@ -927,8 +941,45 @@
           }
           addLog('BLE', `已写入读取指令: ${toHex(READ_COMMAND)}`);
 
-          await packetPromise;
-          showToast('已收到插座蓝牙数据包！请查看底部调试面板');
+          const rawBytes = await packetPromise;
+          const decodedBytes = rawBytes.map(b => b ^ 0x56);
+
+          lastRawHex = toHex(rawBytes);
+          lastDecodedHex = toHex(decodedBytes);
+
+          document.getElementById('rawHexOutput').textContent = lastRawHex;
+          document.getElementById('decodedHexOutput').textContent = lastDecodedHex;
+          addLog('BLE', `XOR 0x56 解码 (${decodedBytes.length}B): ${lastDecodedHex}`);
+
+          if (decodedBytes.length >= 22 && decodedBytes[0] === 0xFD && decodedBytes[1] === 0xFC) {
+            const kwh = (((decodedBytes[7] << 24) | (decodedBytes[8] << 16) | (decodedBytes[9] << 8) | decodedBytes[10]) >>> 0) / 100;
+            const power = ((decodedBytes[15] << 8) | decodedBytes[16]) / 10;
+            const voltage = ((decodedBytes[17] << 8) | decodedBytes[18]) / 10;
+            const current = ((decodedBytes[19] << 8) | decodedBytes[20]) / 1000;
+            const pf = decodedBytes[21] / 100;
+
+            addLog('BLE', `解析成功 -> 电量: ${kwh.toFixed(2)} kWh, 功率: ${power.toFixed(1)} W, 电压: ${voltage.toFixed(1)} V, 电流: ${current.toFixed(3)} A, PF: ${pf.toFixed(2)}`);
+
+            if (targetDevice) {
+              state.isDemo = false;
+              state.readings.push({
+                id: `r_${Date.now()}`,
+                deviceId: targetDevice.id,
+                timestamp: new Date().toISOString(),
+                kwh,
+                power,
+                voltage,
+                current
+              });
+              saveState();
+              renderAll();
+              showToast(`读取成功！${kwh.toFixed(2)} kWh · ${power.toFixed(1)} W`);
+            } else {
+              showToast(`解析成功: ${kwh.toFixed(2)} kWh · ${power.toFixed(1)} W · ${voltage.toFixed(1)} V`);
+            }
+          } else {
+            showToast('已收到蓝牙数据包，请查看调试面板');
+          }
 
           if (server.connected) {
             server.disconnect();
@@ -1121,11 +1172,76 @@
         connectAndReadBle(null);
       });
 
+      let lastCfaSummary = '';
+
+      // Parse .cfa (BTSnoop) file locally in browser
+      document.getElementById('inputCfaFile').addEventListener('change', async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        try {
+          const buf = await file.arrayBuffer();
+          const view = new DataView(buf);
+          const bytes = new Uint8Array(buf);
+          const magic = String.fromCharCode(...bytes.slice(0, 7));
+          if (magic !== 'btsnoop') {
+            showToast('不是有效的 btsnoop (.cfa) 日志文件');
+            return;
+          }
+
+          let offset = 16;
+          const events = [];
+          while (offset + 24 <= bytes.length) {
+            const inclLen = view.getUint32(offset + 4, false);
+            const flags = view.getUint32(offset + 8, false);
+            offset += 24;
+            if (offset + inclLen > bytes.length) break;
+
+            const pkt = bytes.slice(offset, offset + inclLen);
+            offset += inclLen;
+
+            // H4 ACL Data = 0x02
+            if (pkt.length > 9 && pkt[0] === 0x02) {
+              const cid = pkt[7] | (pkt[8] << 8);
+              if (cid === 0x0004 && pkt.length > 9) {
+                const att = pkt.slice(9);
+                const op = att[0];
+                if (op === 0x12 || op === 0x52 || op === 0x1b || op === 0x1d) {
+                  const handle = ((att[2] << 8) | att[1]).toString(16).padStart(4, '0');
+                  const val = att.slice(3);
+                  const dir = (flags & 1) ? 'RX' : 'TX';
+                  const opName = (op === 0x12 || op === 0x52) ? 'Write' : (op === 0x1b ? 'Notify' : 'Indicate');
+                  const hexStr = toHex(val);
+                  const xorStr = toHex(val.map(b => b ^ 0xF0));
+                  events.push(`${dir} ${opName} [0x${handle}]: ${hexStr} | XOR: ${xorStr}`);
+                }
+              }
+            }
+          }
+
+          const box = document.getElementById('cfaResultBox');
+          box.classList.remove('hidden');
+          if (events.length === 0) {
+            lastCfaSummary = `文件 ${file.name} 中未找到 GATT 读写/通知包`;
+            box.innerHTML = `<div class="text-amber-300">${escapeHtml(lastCfaSummary)}</div>`;
+          } else {
+            const tail = events.slice(-40);
+            lastCfaSummary = `=== ${file.name} (共 ${events.length} 条，显示最后 ${tail.length} 条) ===\n` + tail.join('\n');
+            box.innerHTML = `<div class="text-emerald-300 font-semibold">提取到 ${events.length} 条 GATT 记录（显示最后 ${tail.length} 条，点右上角“复制数据包”发给我）：</div>` +
+              tail.map(line => `<div class="text-neutral-200 break-all">${escapeHtml(line)}</div>`).join('');
+          }
+          addLog('INFO', `已解析 ${file.name}，提取到 ${events.length} 条 GATT 记录`);
+          showToast(`解析完成：找到 ${events.length} 条蓝牙通信记录`);
+        } catch (err) {
+          showToast('解析 .cfa 文件失败: ' + (err.message || err));
+        }
+        e.target.value = '';
+      });
+
       // Copy packet button
       document.getElementById('btnCopyPacket').addEventListener('click', async () => {
-        const text = lastRawHex
-          ? `RAW: ${lastRawHex}\nXOR_F0: ${lastDecodedHex}`
-          : '尚未收到蓝牙数据包';
+        const text = lastCfaSummary
+          ? lastCfaSummary
+          : (lastRawHex ? `RAW: ${lastRawHex}\nXOR_F0: ${lastDecodedHex}` : '尚未收到蓝牙数据包');
         try {
           if (navigator.clipboard && navigator.clipboard.writeText) {
             await navigator.clipboard.writeText(text);
