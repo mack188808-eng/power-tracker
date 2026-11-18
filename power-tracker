@@ -1,0 +1,1222 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>蓝牙插座用电统计 · YM-S1-BES</title>
+  <script src="https://cdn.tailwindcss.com/3.4.17"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg-canvas: #F5F5F7;
+      --glass-bg: rgba(255, 255, 255, 0.78);
+      --glass-border: rgba(255, 255, 255, 0.9);
+    }
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      background-color: var(--bg-canvas);
+      color: #1D1D1F;
+      -webkit-font-smoothing: antialiased;
+      padding-bottom: 88px;
+    }
+    .glass-card {
+      background: var(--glass-bg);
+      backdrop-filter: blur(18px);
+      -webkit-backdrop-filter: blur(18px);
+      border: 1px solid rgba(0, 0, 0, 0.06);
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.03);
+    }
+    .glass-nav {
+      background: rgba(255, 255, 255, 0.85);
+      backdrop-filter: blur(24px);
+      -webkit-backdrop-filter: blur(24px);
+      border-top: 1px solid rgba(0, 0, 0, 0.08);
+    }
+    .tab-view {
+      display: none;
+      animation: fadeUp 0.22s cubic-bezier(0.22, 1, 0.36, 1);
+    }
+    .tab-view.active {
+      display: block;
+    }
+    @keyframes fadeUp {
+      from { opacity: 0; transform: translateY(6px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .modal-backdrop {
+      background: rgba(15, 23, 42, 0.36);
+      backdrop-filter: blur(4px);
+      -webkit-backdrop-filter: blur(4px);
+    }
+    .mono {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    }
+  </style>
+</head>
+<body class="min-h-screen">
+  <!-- Top Header -->
+  <header class="sticky top-0 z-30 glass-card border-x-0 border-t-0 px-4 py-3">
+    <div class="max-w-lg mx-auto flex items-center justify-between gap-2">
+      <div class="flex items-center gap-2.5 min-w-0">
+        <div class="w-9 h-9 rounded-2xl bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center text-white shadow-sm shrink-0">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
+          </svg>
+        </div>
+        <div class="min-w-0">
+          <div class="flex items-center gap-1.5">
+            <h1 class="text-base font-semibold tracking-tight truncate">用电管家</h1>
+            <span id="demoBadge" class="hidden text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 shrink-0">示例数据</span>
+          </div>
+          <p class="text-[11px] text-neutral-500 truncate">YM-S1-BES 蓝牙计量统计</p>
+        </div>
+      </div>
+      <div class="flex items-center gap-1.5 shrink-0">
+        <span id="bleStatusPill" class="text-[11px] font-medium px-2.5 py-1 rounded-full bg-neutral-100 text-neutral-600">检测蓝牙中</span>
+        <button id="btnAddDeviceTop" type="button" class="px-3 py-1.5 rounded-full bg-neutral-900 text-white text-xs font-medium active:scale-95 transition">
+          + 添加
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Container -->
+  <main class="max-w-lg mx-auto px-4 pt-4 space-y-4">
+    <!-- Toast Banner -->
+    <div id="toastBox" class="hidden fixed top-16 left-1/2 -translate-x-1/2 z-50 max-w-sm w-[90%] px-4 py-2.5 rounded-2xl bg-neutral-900/95 text-white text-xs font-medium shadow-lg text-center transition"></div>
+
+    <!-- TAB 1: DEVICES & READINGS -->
+    <section id="view-devices" class="tab-view active space-y-4">
+      <!-- Web Bluetooth Capability Notice -->
+      <div id="bleNoticeCard" class="glass-card rounded-2xl p-3.5 text-xs flex items-start gap-2.5">
+        <div id="bleNoticeIcon" class="w-6 h-6 rounded-full bg-emerald-100 text-emerald-700 flex items-center justify-center shrink-0 mt-0.5">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M8.5 14.5L15.5 7.5M15.5 7.5L12 4v16l3.5-3.5-7-7" />
+          </svg>
+        </div>
+        <div class="flex-1 min-w-0">
+          <p id="bleNoticeTitle" class="font-semibold text-neutral-800">支持 Web Bluetooth 网页蓝牙</p>
+          <p id="bleNoticeDesc" class="text-neutral-500 mt-0.5 leading-relaxed">安卓 Chrome / Edge 可直接点击设备卡片上的“蓝牙读取”连接 YM-S1-BES 插座。</p>
+        </div>
+      </div>
+
+      <!-- Summary KPIs -->
+      <div class="grid grid-cols-2 gap-3">
+        <div class="glass-card rounded-2xl p-3.5">
+          <p class="text-[11px] text-neutral-500 font-medium">今日用电</p>
+          <div class="mt-1 flex items-baseline gap-1">
+            <span id="kpiTodayKwh" class="text-2xl font-bold tracking-tight">0.00</span>
+            <span class="text-xs text-neutral-500">kWh</span>
+          </div>
+          <p id="kpiTodayCost" class="text-[11px] text-emerald-600 font-medium mt-0.5">约 ¥0.00</p>
+        </div>
+        <div class="glass-card rounded-2xl p-3.5">
+          <p class="text-[11px] text-neutral-500 font-medium">本月累计</p>
+          <div class="mt-1 flex items-baseline gap-1">
+            <span id="kpiMonthKwh" class="text-2xl font-bold tracking-tight">0.00</span>
+            <span class="text-xs text-neutral-500">kWh</span>
+          </div>
+          <p id="kpiMonthCost" class="text-[11px] text-emerald-600 font-medium mt-0.5">约 ¥0.00</p>
+        </div>
+        <div class="glass-card rounded-2xl p-3.5">
+          <p class="text-[11px] text-neutral-500 font-medium">最近总功率</p>
+          <div class="mt-1 flex items-baseline gap-1">
+            <span id="kpiPower" class="text-2xl font-bold tracking-tight">0</span>
+            <span class="text-xs text-neutral-500">W</span>
+          </div>
+          <p class="text-[11px] text-neutral-400 mt-0.5">各启用插座最新读数之和</p>
+        </div>
+        <div class="glass-card rounded-2xl p-3.5">
+          <p class="text-[11px] text-neutral-500 font-medium">已管理插座</p>
+          <div class="mt-1 flex items-baseline gap-1">
+            <span id="kpiCount" class="text-2xl font-bold tracking-tight">0</span>
+            <span class="text-xs text-neutral-500">个</span>
+          </div>
+          <p id="kpiActiveCount" class="text-[11px] text-neutral-400 mt-0.5">0 个启用统计</p>
+        </div>
+      </div>
+
+      <!-- Quick Actions -->
+      <div class="flex items-center justify-between gap-2">
+        <h2 class="text-sm font-semibold text-neutral-800">插座列表</h2>
+        <div class="flex items-center gap-2">
+          <button id="btnClearDemo" type="button" class="hidden text-xs px-2.5 py-1 rounded-full bg-amber-50 text-amber-700 border border-amber-200 font-medium">
+            清空示例
+          </button>
+          <button id="btnScanStandalone" type="button" class="text-xs px-3 py-1 rounded-full bg-emerald-600 text-white font-medium active:scale-95 transition">
+            扫描 BLE 调试
+          </button>
+        </div>
+      </div>
+
+      <!-- Device List -->
+      <div id="deviceList" class="space-y-3"></div>
+
+      <!-- BLE Raw Packet Inspector -->
+      <div class="glass-card rounded-2xl p-3.5 space-y-2">
+        <div class="flex items-center justify-between">
+          <div>
+            <h3 class="text-xs font-semibold text-neutral-800">YM-S1-BES 协议调试面板</h3>
+            <p class="text-[11px] text-neutral-500">Service: 49535343-fe7d... · 自动执行 XOR 0xF0 解码</p>
+          </div>
+          <button id="btnCopyPacket" type="button" class="text-[11px] px-2.5 py-1 rounded-full bg-neutral-100 hover:bg-neutral-200 text-neutral-700 font-medium">
+            复制数据包
+          </button>
+        </div>
+        <div class="bg-neutral-900 text-neutral-100 rounded-xl p-3 text-[11px] mono space-y-1.5 overflow-x-auto">
+          <div><span class="text-neutral-400">发送指令:</span> 07 06 EB E8 BE B6 BE DF B1</div>
+          <div><span class="text-neutral-400">原始 HEX:</span> <span id="rawHexOutput">等待蓝牙通知...</span></div>
+          <div><span class="text-emerald-400">XOR 0xF0:</span> <span id="decodedHexOutput">--</span></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 2: STATS & CHARTS -->
+    <section id="view-stats" class="tab-view space-y-4">
+      <!-- Filter & Rate Controls -->
+      <div class="glass-card rounded-2xl p-3.5 space-y-3">
+        <div class="flex items-center justify-between gap-2">
+          <div class="inline-flex p-1 rounded-xl bg-neutral-100">
+            <button id="btnModeDaily" type="button" class="px-3 py-1 rounded-lg text-xs font-medium bg-white shadow-sm text-neutral-900">按日统计</button>
+            <button id="btnModeMonthly" type="button" class="px-3 py-1 rounded-lg text-xs font-medium text-neutral-600">按月统计</button>
+          </div>
+          <div class="flex items-center gap-1.5">
+            <label for="rateInput" class="text-xs text-neutral-500">电价</label>
+            <input id="rateInput" type="number" step="0.01" min="0" value="0.56" class="w-16 px-2 py-1 rounded-lg border border-neutral-200 bg-white text-xs text-right font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+            <span class="text-xs text-neutral-500">元/度</span>
+          </div>
+        </div>
+        <div class="flex items-center gap-2">
+          <label for="statsDeviceFilter" class="text-xs text-neutral-500 shrink-0">筛选插座</label>
+          <select id="statsDeviceFilter" class="flex-1 px-2.5 py-1.5 rounded-xl border border-neutral-200 bg-white text-xs font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500">
+            <option value="all">全部启用插座</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Bar Chart: kWh -->
+      <div class="glass-card rounded-2xl p-3.5">
+        <div class="flex items-center justify-between mb-2">
+          <h3 class="text-xs font-semibold text-neutral-800">用电量柱状图 (kWh)</h3>
+          <span id="statsTotalKwh" class="text-xs font-semibold text-emerald-700">合计 0.00 kWh</span>
+        </div>
+        <div class="relative h-64">
+          <canvas id="kwhChart"></canvas>
+        </div>
+      </div>
+
+      <!-- Line Chart: Cost -->
+      <div class="glass-card rounded-2xl p-3.5">
+        <div class="flex items-center justify-between mb-2">
+          <h3 class="text-xs font-semibold text-neutral-800">电费金额折线图 (¥)</h3>
+          <span id="statsTotalCost" class="text-xs font-semibold text-teal-700">合计 ¥0.00</span>
+        </div>
+        <div class="relative h-64">
+          <canvas id="costChart"></canvas>
+        </div>
+      </div>
+
+      <!-- Breakdown Table -->
+      <div class="glass-card rounded-2xl p-3.5">
+        <h3 class="text-xs font-semibold text-neutral-800 mb-2.5">统计明细</h3>
+        <div class="overflow-x-auto">
+          <table class="w-full text-xs text-left">
+            <thead>
+              <tr class="border-b border-neutral-200 text-neutral-500">
+                <th class="py-2 font-medium">周期</th>
+                <th class="py-2 font-medium text-right">用电量 (kWh)</th>
+                <th class="py-2 font-medium text-right">电费 (¥)</th>
+              </tr>
+            </thead>
+            <tbody id="statsTableBody" class="divide-y divide-neutral-100"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 3: LOGS & BACKUP -->
+    <section id="view-logs" class="tab-view space-y-4">
+      <div class="glass-card rounded-2xl p-3.5 space-y-3">
+        <h3 class="text-xs font-semibold text-neutral-800">本地数据与备份</h3>
+        <p class="text-[11px] text-neutral-500 leading-relaxed">所有插座配置与采集读数均保存在当前浏览器的本地存储中，不上传任何服务器。</p>
+        <div class="flex flex-wrap gap-2">
+          <button id="btnExportJson" type="button" class="px-3 py-1.5 rounded-xl bg-neutral-900 text-white text-xs font-medium active:scale-95 transition">导出 JSON 备份</button>
+          <label class="px-3 py-1.5 rounded-xl bg-white border border-neutral-200 text-neutral-700 text-xs font-medium cursor-pointer active:scale-95 transition">
+            导入 JSON
+            <input id="inputImportJson" type="file" accept="application/json" class="hidden" />
+          </label>
+          <button id="btnResetDemo" type="button" class="px-3 py-1.5 rounded-xl bg-neutral-100 text-neutral-700 text-xs font-medium active:scale-95 transition">恢复示例数据</button>
+        </div>
+      </div>
+
+      <div class="glass-card rounded-2xl p-3.5 space-y-2.5">
+        <div class="flex items-center justify-between">
+          <h3 class="text-xs font-semibold text-neutral-800">运行日志</h3>
+          <button id="btnClearLogs" type="button" class="text-[11px] text-neutral-500 hover:text-neutral-800">清空日志</button>
+        </div>
+        <div id="logContainer" class="space-y-1.5 max-h-96 overflow-y-auto text-[11px] mono"></div>
+      </div>
+    </section>
+  </main>
+
+  <!-- Bottom Tab Navigation -->
+  <nav class="fixed bottom-0 inset-x-0 z-30 glass-nav">
+    <div class="max-w-lg mx-auto grid grid-cols-3 h-16">
+      <button type="button" data-tab="devices" class="nav-tab flex flex-col items-center justify-center gap-0.5 text-emerald-600 font-semibold">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
+        </svg>
+        <span class="text-[11px]">设备与读数</span>
+      </button>
+      <button type="button" data-tab="stats" class="nav-tab flex flex-col items-center justify-center gap-0.5 text-neutral-500">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+        </svg>
+        <span class="text-[11px]">日/月统计</span>
+      </button>
+      <button type="button" data-tab="logs" class="nav-tab flex flex-col items-center justify-center gap-0.5 text-neutral-500">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 12h16M4 18h10" />
+        </svg>
+        <span class="text-[11px]">日志与备份</span>
+      </button>
+    </div>
+  </nav>
+
+  <!-- Modal: Add / Edit Device -->
+  <div id="deviceModal" class="hidden fixed inset-0 z-50 modal-backdrop flex items-end sm:items-center justify-center p-0 sm:p-4">
+    <div class="bg-white w-full max-w-md rounded-t-3xl sm:rounded-3xl p-5 space-y-4 max-h-[90vh] overflow-y-auto shadow-2xl">
+      <div class="flex items-center justify-between">
+        <h3 id="deviceModalTitle" class="text-base font-semibold">添加蓝牙插座</h3>
+        <button id="btnCloseDeviceModal" type="button" class="w-8 h-8 rounded-full bg-neutral-100 text-neutral-600 flex items-center justify-center text-sm">✕</button>
+      </div>
+
+      <!-- QR Parser -->
+      <div class="bg-neutral-50 rounded-2xl p-3 space-y-2 border border-neutral-100">
+        <label for="qrUrlInput" class="block text-xs font-medium text-neutral-700">微信小程序二维码链接（可选）</label>
+        <div class="flex gap-2">
+          <input id="qrUrlInput" type="text" placeholder="https://sesame.iyunmu.com/controlHappy/?KK01264I7533=DG57ZE" class="flex-1 px-3 py-1.5 rounded-xl border border-neutral-200 bg-white text-xs focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+          <button id="btnParseQr" type="button" class="px-3 py-1.5 rounded-xl bg-emerald-600 text-white text-xs font-medium shrink-0">解析</button>
+        </div>
+      </div>
+
+      <form id="deviceForm" class="space-y-3 text-xs">
+        <input type="hidden" id="editDeviceId" />
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label for="devName" class="block text-neutral-600 font-medium mb-1">插座名称 *</label>
+            <input id="devName" type="text" required placeholder="例如：客厅空调" class="w-full px-3 py-2 rounded-xl border border-neutral-200 focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+          </div>
+          <div>
+            <label for="devGroup" class="block text-neutral-600 font-medium mb-1">分组</label>
+            <input id="devGroup" type="text" placeholder="例如：客厅" class="w-full px-3 py-2 rounded-xl border border-neutral-200 focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+          </div>
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label for="devSn" class="block text-neutral-600 font-medium mb-1">序列号 (S/N)</label>
+            <input id="devSn" type="text" placeholder="KK01264I7533" class="w-full px-3 py-2 rounded-xl border border-neutral-200 mono focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+          </div>
+          <div>
+            <label for="devPin" class="block text-neutral-600 font-medium mb-1">PIN 码</label>
+            <input id="devPin" type="text" placeholder="DG57ZE" class="w-full px-3 py-2 rounded-xl border border-neutral-200 mono focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+          </div>
+        </div>
+        <div>
+          <label for="devStrategy" class="block text-neutral-600 font-medium mb-1">初始计量策略</label>
+          <select id="devStrategy" class="w-full px-3 py-2 rounded-xl border border-neutral-200 bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500">
+            <option value="anchor">第一条读数作为锚点（旧插座不计历史累计）</option>
+            <option value="from_zero">从 0 开始累计（新插座或已清零）</option>
+          </select>
+        </div>
+        <label class="flex items-center gap-2 pt-1 cursor-pointer">
+          <input id="devEnabled" type="checkbox" checked class="rounded text-emerald-600 focus:ring-emerald-500" />
+          <span class="text-neutral-700 font-medium">启用该插座统计</span>
+        </label>
+        <div class="pt-2 flex gap-2">
+          <button type="submit" class="flex-1 py-2.5 rounded-2xl bg-neutral-900 text-white font-medium text-xs active:scale-95 transition">保存插座</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Modal: Manual Reading Entry -->
+  <div id="readingModal" class="hidden fixed inset-0 z-50 modal-backdrop flex items-end sm:items-center justify-center p-0 sm:p-4">
+    <div class="bg-white w-full max-w-md rounded-t-3xl sm:rounded-3xl p-5 space-y-4 shadow-2xl">
+      <div class="flex items-center justify-between">
+        <div>
+          <h3 class="text-base font-semibold">录入插座读数</h3>
+          <p id="readingDeviceSubtitle" class="text-xs text-neutral-500"></p>
+        </div>
+        <button id="btnCloseReadingModal" type="button" class="w-8 h-8 rounded-full bg-neutral-100 text-neutral-600 flex items-center justify-center text-sm">✕</button>
+      </div>
+      <form id="readingForm" class="space-y-3 text-xs">
+        <input type="hidden" id="readingDeviceId" />
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label for="readKwh" class="block text-neutral-600 font-medium mb-1">累计电量 (kWh) *</label>
+            <input id="readKwh" type="number" step="0.001" min="0" required placeholder="例如：128.45" class="w-full px-3 py-2 rounded-xl border border-neutral-200 focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+          </div>
+          <div>
+            <label for="readPower" class="block text-neutral-600 font-medium mb-1">当前功率 (W)</label>
+            <input id="readPower" type="number" step="0.1" min="0" placeholder="例如：450" class="w-full px-3 py-2 rounded-xl border border-neutral-200 focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+          </div>
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label for="readVoltage" class="block text-neutral-600 font-medium mb-1">电压 (V)</label>
+            <input id="readVoltage" type="number" step="0.1" min="0" value="220.0" class="w-full px-3 py-2 rounded-xl border border-neutral-200 focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+          </div>
+          <div>
+            <label for="readCurrent" class="block text-neutral-600 font-medium mb-1">电流 (A)</label>
+            <input id="readCurrent" type="number" step="0.01" min="0" placeholder="例如：2.05" class="w-full px-3 py-2 rounded-xl border border-neutral-200 focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+          </div>
+        </div>
+        <div>
+          <label for="readTime" class="block text-neutral-600 font-medium mb-1">采集时间</label>
+          <input id="readTime" type="datetime-local" required class="w-full px-3 py-2 rounded-xl border border-neutral-200 focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+        </div>
+        <button type="submit" class="w-full py-2.5 rounded-2xl bg-emerald-600 text-white font-medium text-xs active:scale-95 transition">保存读数</button>
+      </form>
+    </div>
+  </div>
+
+  <script>
+    (function () {
+      const STORAGE_KEY = 'ble_plug_tracker_v1';
+      const BLE_SERVICE_UUID = '49535343-fe7d-4ae5-8fa9-9fafd205e455';
+      const BLE_NOTIFY_UUID = '49535343-1e4d-bd9-ba61-23c647249616';
+      const BLE_WRITE_UUID = '49535343-8841-43f4-a8d4-ecbe34729bb3';
+      const READ_COMMAND = new Uint8Array([0x07, 0x06, 0xEB, 0xE8, 0xBE, 0xB6, 0xBE, 0xDF, 0xB1]);
+
+      let kwhChartInstance = null;
+      let costChartInstance = null;
+      let lastRawHex = '';
+      let lastDecodedHex = '';
+
+      function buildDemoState() {
+        const now = new Date();
+        const makeIso = (daysAgo, hour) => {
+          const d = new Date(now);
+          d.setDate(d.getDate() - daysAgo);
+          d.setHours(hour, 0, 0, 0);
+          return d.toISOString();
+        };
+        return {
+          isDemo: true,
+          rate: 0.56,
+          statsMode: 'daily',
+          statsDeviceId: 'all',
+          devices: [
+            {
+              id: 'dev_ac',
+              name: '客厅空调插座',
+              group: '客厅',
+              model: 'YM-S1-BES',
+              sn: 'KK01264I7533',
+              pin: 'DG57ZE',
+              strategy: 'anchor',
+              enabled: true,
+              bleName: 'YM-S1-BES_7533'
+            },
+            {
+              id: 'dev_desk',
+              name: '书房电脑插座',
+              group: '书房',
+              model: 'YM-S1-BES',
+              sn: 'KK01264I8821',
+              pin: 'AB92KC',
+              strategy: 'from_zero',
+              enabled: true,
+              bleName: 'YM-S1-BES_8821'
+            }
+          ],
+          readings: [
+            { id: 'r1', deviceId: 'dev_ac', timestamp: makeIso(6, 9), kwh: 120.00, power: 920, voltage: 221.5, current: 4.15 },
+            { id: 'r2', deviceId: 'dev_ac', timestamp: makeIso(5, 9), kwh: 124.20, power: 880, voltage: 220.8, current: 3.98 },
+            { id: 'r3', deviceId: 'dev_ac', timestamp: makeIso(4, 9), kwh: 129.10, power: 950, voltage: 222.0, current: 4.28 },
+            { id: 'r4', deviceId: 'dev_ac', timestamp: makeIso(3, 9), kwh: 133.40, power: 790, voltage: 221.1, current: 3.57 },
+            { id: 'r5', deviceId: 'dev_ac', timestamp: makeIso(2, 9), kwh: 138.90, power: 1020, voltage: 219.6, current: 4.64 },
+            { id: 'r6', deviceId: 'dev_ac', timestamp: makeIso(1, 9), kwh: 143.50, power: 860, voltage: 220.4, current: 3.90 },
+            { id: 'r7', deviceId: 'dev_ac', timestamp: makeIso(0, 14), kwh: 146.10, power: 810, voltage: 221.2, current: 3.66 },
+
+            { id: 'd1', deviceId: 'dev_desk', timestamp: makeIso(5, 10), kwh: 1.40, power: 145, voltage: 220.9, current: 0.66 },
+            { id: 'd2', deviceId: 'dev_desk', timestamp: makeIso(4, 10), kwh: 2.95, power: 160, voltage: 221.4, current: 0.72 },
+            { id: 'd3', deviceId: 'dev_desk', timestamp: makeIso(3, 10), kwh: 4.20, power: 130, voltage: 220.6, current: 0.59 },
+            { id: 'd4', deviceId: 'dev_desk', timestamp: makeIso(2, 10), kwh: 5.85, power: 175, voltage: 220.1, current: 0.80 },
+            { id: 'd5', deviceId: 'dev_desk', timestamp: makeIso(1, 10), kwh: 7.40, power: 155, voltage: 221.0, current: 0.70 },
+            { id: 'd6', deviceId: 'dev_desk', timestamp: makeIso(0, 15), kwh: 8.65, power: 168, voltage: 221.3, current: 0.76 }
+          ],
+          logs: [
+            { time: new Date().toLocaleTimeString('zh-CN', { hour12: false }), level: 'INFO', msg: '已加载示例数据，可添加你的 YM-S1-BES 插座或直接蓝牙读取。' }
+          ]
+        };
+      }
+
+      function loadState() {
+        try {
+          const raw = localStorage.getItem(STORAGE_KEY);
+          if (raw) {
+            const parsed = JSON.parse(raw);
+            if (parsed && Array.isArray(parsed.devices) && Array.isArray(parsed.readings)) {
+              return parsed;
+            }
+          }
+        } catch (e) {
+          // ignore storage errors in restricted iframes
+        }
+        return buildDemoState();
+      }
+
+      let state = loadState();
+
+      function saveState() {
+        try {
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+        } catch (e) {
+          // ignore storage errors
+        }
+      }
+
+      function addLog(level, msg) {
+        const entry = {
+          time: new Date().toLocaleTimeString('zh-CN', { hour12: false }),
+          level,
+          msg
+        };
+        state.logs.unshift(entry);
+        if (state.logs.length > 120) state.logs.length = 120;
+        saveState();
+        renderLogs();
+      }
+
+      function showToast(msg) {
+        const box = document.getElementById('toastBox');
+        box.textContent = msg;
+        box.classList.remove('hidden');
+        clearTimeout(showToast._timer);
+        showToast._timer = setTimeout(() => {
+          box.classList.add('hidden');
+        }, 2800);
+      }
+
+      // Check Web Bluetooth capability
+      function checkBleSupport() {
+        const pill = document.getElementById('bleStatusPill');
+        const title = document.getElementById('bleNoticeTitle');
+        const desc = document.getElementById('bleNoticeDesc');
+        const icon = document.getElementById('bleNoticeIcon');
+
+        if (navigator.bluetooth) {
+          pill.textContent = 'Web Bluetooth 就绪';
+          pill.className = 'text-[11px] font-medium px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-700';
+          title.textContent = '当前浏览器支持网页蓝牙';
+          desc.textContent = '请使用安卓 Chrome / Edge 打开（需 HTTPS 环境），点击“蓝牙读取”即可扫描并连接 YM-S1-BES。';
+          icon.className = 'w-6 h-6 rounded-full bg-emerald-100 text-emerald-700 flex items-center justify-center shrink-0 mt-0.5';
+        } else {
+          pill.textContent = '仅手动模式';
+          pill.className = 'text-[11px] font-medium px-2.5 py-1 rounded-full bg-amber-100 text-amber-700';
+          title.textContent = '当前浏览器不支持网页蓝牙';
+          desc.textContent = '请改用安卓 Chrome / Edge（或 iOS 的 Bluefy 浏览器）访问 HTTPS 页面以启用蓝牙直连；当前仍可手动录入并统计电费。';
+          icon.className = 'w-6 h-6 rounded-full bg-amber-100 text-amber-700 flex items-center justify-center shrink-0 mt-0.5';
+        }
+      }
+
+      // Prorated electricity usage calculation matching original repo design
+      function computeUsageBuckets(mode, filterDeviceId) {
+        const buckets = {}; // key -> kWh
+        const enabledDevices = state.devices.filter(d => d.enabled && (filterDeviceId === 'all' || d.id === filterDeviceId));
+
+        for (const dev of enabledDevices) {
+          const devReadings = state.readings
+            .filter(r => r.deviceId === dev.id)
+            .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+
+          if (devReadings.length === 0) continue;
+
+          const getKey = (date) => {
+            const y = date.getFullYear();
+            const m = String(date.getMonth() + 1).padStart(2, '0');
+            const day = String(date.getDate()).padStart(2, '0');
+            return mode === 'monthly' ? `${y}-${m}` : `${y}-${m}-${day}`;
+          };
+
+          const addToBucket = (key, kwh) => {
+            if (!Number.isFinite(kwh) || kwh <= 0) return;
+            buckets[key] = (buckets[key] || 0) + kwh;
+          };
+
+          // First reading
+          const first = devReadings[0];
+          if (dev.strategy === 'from_zero') {
+            addToBucket(getKey(new Date(first.timestamp)), first.kwh);
+          }
+
+          // Subsequent intervals
+          for (let i = 1; i < devReadings.length; i++) {
+            const prev = devReadings[i - 1];
+            const curr = devReadings[i];
+            const t1 = new Date(prev.timestamp);
+            const t2 = new Date(curr.timestamp);
+            let delta = curr.kwh - prev.kwh;
+
+            if (delta < 0) {
+              // Device reset
+              delta = dev.strategy === 'from_zero' ? curr.kwh : 0;
+              addToBucket(getKey(t2), delta);
+              continue;
+            }
+
+            if (delta === 0) continue;
+
+            const totalMs = t2.getTime() - t1.getTime();
+            const k1 = getKey(t1);
+            const k2 = getKey(t2);
+
+            if (k1 === k2 || totalMs <= 0) {
+              addToBucket(k2, delta);
+            } else {
+              // Prorate across day or month boundaries
+              let cursor = new Date(t1);
+              while (cursor < t2) {
+                const key = getKey(cursor);
+                let boundary;
+                if (mode === 'monthly') {
+                  boundary = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1, 0, 0, 0, 0);
+                } else {
+                  boundary = new Date(cursor.getFullYear(), cursor.getMonth(), cursor.getDate() + 1, 0, 0, 0, 0);
+                }
+                const segEnd = boundary < t2 ? boundary : t2;
+                const ratio = (segEnd.getTime() - cursor.getTime()) / totalMs;
+                addToBucket(key, delta * ratio);
+                cursor = segEnd;
+              }
+            }
+          }
+        }
+
+        const keys = Object.keys(buckets).sort();
+        return keys.map(k => ({
+          key: k,
+          kwh: Number(buckets[k].toFixed(3)),
+          cost: Number((buckets[k] * state.rate).toFixed(2))
+        }));
+      }
+
+      function renderKPIs() {
+        const now = new Date();
+        const todayKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+        const monthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+
+        const dailyRows = computeUsageBuckets('daily', 'all');
+        const monthlyRows = computeUsageBuckets('monthly', 'all');
+
+        const todayRow = dailyRows.find(r => r.key === todayKey);
+        const monthRow = monthlyRows.find(r => r.key === monthKey);
+
+        const todayKwh = todayRow ? todayRow.kwh : 0;
+        const monthKwh = monthRow ? monthRow.kwh : 0;
+
+        let totalPower = 0;
+        const enabledDevs = state.devices.filter(d => d.enabled);
+        for (const dev of enabledDevs) {
+          const latest = state.readings
+            .filter(r => r.deviceId === dev.id)
+            .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))[0];
+          if (latest && Number.isFinite(latest.power)) {
+            totalPower += latest.power;
+          }
+        }
+
+        document.getElementById('kpiTodayKwh').textContent = todayKwh.toFixed(2);
+        document.getElementById('kpiTodayCost').textContent = `约 ¥${(todayKwh * state.rate).toFixed(2)}`;
+        document.getElementById('kpiMonthKwh').textContent = monthKwh.toFixed(2);
+        document.getElementById('kpiMonthCost').textContent = `约 ¥${(monthKwh * state.rate).toFixed(2)}`;
+        document.getElementById('kpiPower').textContent = Math.round(totalPower);
+        document.getElementById('kpiCount').textContent = state.devices.length;
+        document.getElementById('kpiActiveCount').textContent = `${enabledDevs.length} 个启用统计`;
+
+        const demoBadge = document.getElementById('demoBadge');
+        const btnClearDemo = document.getElementById('btnClearDemo');
+        if (state.isDemo) {
+          demoBadge.classList.remove('hidden');
+          btnClearDemo.classList.remove('hidden');
+        } else {
+          demoBadge.classList.add('hidden');
+          btnClearDemo.classList.add('hidden');
+        }
+      }
+
+      function renderDevices() {
+        const container = document.getElementById('deviceList');
+        if (state.devices.length === 0) {
+          container.innerHTML = `
+            <div class="glass-card rounded-2xl p-6 text-center space-y-2">
+              <p class="text-sm font-medium text-neutral-700">还没有添加蓝牙插座</p>
+              <p class="text-xs text-neutral-500">点击右上角“+ 添加”，粘贴微信小程序二维码链接或直接填写设备信息。</p>
+            </div>
+          `;
+          return;
+        }
+
+        container.innerHTML = state.devices.map(dev => {
+          const devReadings = state.readings
+            .filter(r => r.deviceId === dev.id)
+            .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+          const latest = devReadings[0];
+          const latestTime = latest ? new Date(latest.timestamp).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '暂无读数';
+
+          return `
+            <div class="glass-card rounded-2xl p-4 space-y-3" data-device-id="${dev.id}">
+              <div class="flex items-start justify-between gap-2">
+                <div class="min-w-0">
+                  <div class="flex items-center gap-2">
+                    <h3 class="text-sm font-semibold text-neutral-900 truncate">${escapeHtml(dev.name)}</h3>
+                    ${dev.group ? `<span class="text-[10px] px-2 py-0.5 rounded-full bg-neutral-100 text-neutral-600 font-medium">${escapeHtml(dev.group)}</span>` : ''}
+                    ${!dev.enabled ? `<span class="text-[10px] px-2 py-0.5 rounded-full bg-neutral-200 text-neutral-500">已停用</span>` : ''}
+                  </div>
+                  <p class="text-[11px] text-neutral-500 mono mt-0.5">
+                    S/N: ${escapeHtml(dev.sn || '未填写')} · ${dev.strategy === 'anchor' ? '锚点基线' : '从0累计'}
+                  </p>
+                </div>
+                <div class="flex items-center gap-1 shrink-0">
+                  <button type="button" data-action="edit-device" data-id="${dev.id}" class="text-[11px] px-2 py-1 rounded-lg text-neutral-500 hover:bg-neutral-100">编辑</button>
+                  <button type="button" data-action="delete-device" data-id="${dev.id}" class="text-[11px] px-2 py-1 rounded-lg text-rose-500 hover:bg-rose-50">删除</button>
+                </div>
+              </div>
+
+              <div class="grid grid-cols-4 gap-2 bg-neutral-50/80 rounded-xl p-2.5 text-center">
+                <div>
+                  <p class="text-[10px] text-neutral-400">累计电量</p>
+                  <p class="text-xs font-semibold text-neutral-900 mt-0.5">${latest ? latest.kwh.toFixed(2) : '--'} <span class="text-[10px] font-normal">kWh</span></p>
+                </div>
+                <div>
+                  <p class="text-[10px] text-neutral-400">功率</p>
+                  <p class="text-xs font-semibold text-neutral-900 mt-0.5">${latest && latest.power != null ? latest.power : '--'} <span class="text-[10px] font-normal">W</span></p>
+                </div>
+                <div>
+                  <p class="text-[10px] text-neutral-400">电压</p>
+                  <p class="text-xs font-semibold text-neutral-900 mt-0.5">${latest && latest.voltage != null ? latest.voltage.toFixed(1) : '--'} <span class="text-[10px] font-normal">V</span></p>
+                </div>
+                <div>
+                  <p class="text-[10px] text-neutral-400">电流</p>
+                  <p class="text-xs font-semibold text-neutral-900 mt-0.5">${latest && latest.current != null ? latest.current.toFixed(2) : '--'} <span class="text-[10px] font-normal">A</span></p>
+                </div>
+              </div>
+
+              <div class="flex items-center justify-between gap-2 pt-0.5">
+                <span class="text-[11px] text-neutral-400">最近更新: ${latestTime}</span>
+                <div class="flex items-center gap-2">
+                  <button type="button" data-action="manual-read" data-id="${dev.id}" class="px-3 py-1.5 rounded-xl bg-white border border-neutral-200 text-neutral-700 text-xs font-medium active:scale-95 transition">手动录入</button>
+                  <button type="button" data-action="ble-read" data-id="${dev.id}" class="px-3 py-1.5 rounded-xl bg-emerald-600 text-white text-xs font-medium active:scale-95 transition">蓝牙读取</button>
+                </div>
+              </div>
+            </div>
+          `;
+        }).join('');
+      }
+
+      function renderStatsFilter() {
+        const select = document.getElementById('statsDeviceFilter');
+        const currentVal = state.statsDeviceId || 'all';
+        select.innerHTML = '<option value="all">全部启用插座</option>' +
+          state.devices.filter(d => d.enabled).map(d => `<option value="${d.id}">${escapeHtml(d.name)}</option>`).join('');
+        select.value = state.devices.some(d => d.id === currentVal) ? currentVal : 'all';
+        state.statsDeviceId = select.value;
+      }
+
+      function renderStats() {
+        renderStatsFilter();
+        document.getElementById('rateInput').value = state.rate;
+
+        const btnDaily = document.getElementById('btnModeDaily');
+        const btnMonthly = document.getElementById('btnModeMonthly');
+        if (state.statsMode === 'daily') {
+          btnDaily.className = 'px-3 py-1 rounded-lg text-xs font-medium bg-white shadow-sm text-neutral-900';
+          btnMonthly.className = 'px-3 py-1 rounded-lg text-xs font-medium text-neutral-600';
+        } else {
+          btnMonthly.className = 'px-3 py-1 rounded-lg text-xs font-medium bg-white shadow-sm text-neutral-900';
+          btnDaily.className = 'px-3 py-1 rounded-lg text-xs font-medium text-neutral-600';
+        }
+
+        const rows = computeUsageBuckets(state.statsMode, state.statsDeviceId);
+        const totalKwh = rows.reduce((s, r) => s + r.kwh, 0);
+        const totalCost = rows.reduce((s, r) => s + r.cost, 0);
+
+        document.getElementById('statsTotalKwh').textContent = `合计 ${totalKwh.toFixed(2)} kWh`;
+        document.getElementById('statsTotalCost').textContent = `合计 ¥${totalCost.toFixed(2)}`;
+
+        const tbody = document.getElementById('statsTableBody');
+        if (rows.length === 0) {
+          tbody.innerHTML = '<tr><td colspan="3" class="py-4 text-center text-neutral-400">暂无统计数据</td></tr>';
+        } else {
+          tbody.innerHTML = [...rows].reverse().map(r => `
+            <tr>
+              <td class="py-2 font-medium text-neutral-800">${r.key}</td>
+              <td class="py-2 text-right text-neutral-700">${r.kwh.toFixed(3)}</td>
+              <td class="py-2 text-right font-medium text-emerald-700">¥${r.cost.toFixed(2)}</td>
+            </tr>
+          `).join('');
+        }
+
+        const labels = rows.map(r => state.statsMode === 'daily' ? r.key.slice(5) : r.key);
+        const kwhData = rows.map(r => r.kwh);
+        const costData = rows.map(r => r.cost);
+
+        if (typeof Chart !== 'undefined') {
+          if (kwhChartInstance) kwhChartInstance.destroy();
+          if (costChartInstance) costChartInstance.destroy();
+
+          const ctx1 = document.getElementById('kwhChart').getContext('2d');
+          kwhChartInstance = new Chart(ctx1, {
+            type: 'bar',
+            data: {
+              labels,
+              datasets: [{
+                label: '用电量 (kWh)',
+                data: kwhData,
+                backgroundColor: 'rgba(16, 185, 129, 0.82)',
+                borderRadius: 6
+              }]
+            },
+            options: {
+              responsive: true,
+              maintainAspectRatio: false,
+              plugins: { legend: { display: false } },
+              scales: {
+                y: { beginAtZero: true, grid: { color: 'rgba(0,0,0,0.04)' } },
+                x: { grid: { display: false } }
+              }
+            }
+          });
+
+          const ctx2 = document.getElementById('costChart').getContext('2d');
+          costChartInstance = new Chart(ctx2, {
+            type: 'line',
+            data: {
+              labels,
+              datasets: [{
+                label: '电费 (¥)',
+                data: costData,
+                borderColor: '#0F766E',
+                backgroundColor: 'rgba(15, 118, 110, 0.12)',
+                fill: true,
+                tension: 0.35,
+                pointRadius: 3
+              }]
+            },
+            options: {
+              responsive: true,
+              maintainAspectRatio: false,
+              plugins: { legend: { display: false } },
+              scales: {
+                y: { beginAtZero: true, grid: { color: 'rgba(0,0,0,0.04)' } },
+                x: { grid: { display: false } }
+              }
+            }
+          });
+        }
+      }
+
+      function renderLogs() {
+        const container = document.getElementById('logContainer');
+        if (state.logs.length === 0) {
+          container.innerHTML = '<p class="text-neutral-400 text-center py-4">暂无运行日志</p>';
+          return;
+        }
+        container.innerHTML = state.logs.map(l => {
+          const color = l.level === 'ERROR' ? 'text-rose-600' : l.level === 'BLE' ? 'text-emerald-600' : 'text-neutral-500';
+          return `<div class="p-2 rounded-xl bg-neutral-50 border border-neutral-100 leading-relaxed">
+            <span class="text-neutral-400">[${l.time}]</span>
+            <span class="${color} font-semibold">[${l.level}]</span>
+            <span class="text-neutral-800 break-all">${escapeHtml(l.msg)}</span>
+          </div>`;
+        }).join('');
+      }
+
+      function renderAll() {
+        renderKPIs();
+        renderDevices();
+        renderStats();
+        renderLogs();
+      }
+
+      function escapeHtml(str) {
+        return String(str)
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;');
+      }
+
+      function toHex(bytes) {
+        return Array.from(bytes).map(b => b.toString(16).padStart(2, '0').toUpperCase()).join(' ');
+      }
+
+      // Web Bluetooth connection & YM-S1-BES query
+      async function connectAndReadBle(targetDevice) {
+        if (!navigator.bluetooth) {
+          showToast('当前浏览器不支持网页蓝牙，请使用安卓 Chrome 或手动录入');
+          addLog('ERROR', '浏览器不支持 navigator.bluetooth');
+          return;
+        }
+
+        try {
+          addLog('BLE', `正在扫描蓝牙插座 (${targetDevice ? targetDevice.name : '调试模式'})...`);
+          const device = await navigator.bluetooth.requestDevice({
+            acceptAllDevices: true,
+            optionalServices: [BLE_SERVICE_UUID]
+          });
+          addLog('BLE', `已选择设备: ${device.name || '未命名设备'} (${device.id})`);
+
+          const server = await device.gatt.connect();
+          addLog('BLE', 'GATT 连接成功，正在获取服务...');
+          const service = await server.getPrimaryService(BLE_SERVICE_UUID);
+          const notifyChar = await service.getCharacteristic(BLE_NOTIFY_UUID);
+          const writeChar = await service.getCharacteristic(BLE_WRITE_UUID);
+
+          await notifyChar.startNotifications();
+          addLog('BLE', '已订阅通知特征值，准备发送读取指令...');
+
+          const packetPromise = new Promise((resolve, reject) => {
+            const timer = setTimeout(() => {
+              notifyChar.removeEventListener('characteristicvaluechanged', onNotify);
+              reject(new Error('读取通知超时（5秒），请确认手机微信小程序未占用插座连接'));
+            }, 5000);
+
+            function onNotify(event) {
+              const value = event.target.value;
+              const rawBytes = new Uint8Array(value.buffer);
+              const decodedBytes = rawBytes.map(b => b ^ 0xF0);
+
+              lastRawHex = toHex(rawBytes);
+              lastDecodedHex = toHex(decodedBytes);
+
+              document.getElementById('rawHexOutput').textContent = lastRawHex;
+              document.getElementById('decodedHexOutput').textContent = lastDecodedHex;
+
+              addLog('BLE', `收到原始包: ${lastRawHex}`);
+              addLog('BLE', `XOR 0xF0 解码: ${lastDecodedHex}`);
+
+              clearTimeout(timer);
+              notifyChar.removeEventListener('characteristicvaluechanged', onNotify);
+              resolve({ rawBytes, decodedBytes });
+            }
+            notifyChar.addEventListener('characteristicvaluechanged', onNotify);
+          });
+
+          await writeChar.writeValue(READ_COMMAND);
+          addLog('BLE', `已写入读取指令: ${toHex(READ_COMMAND)}`);
+
+          await packetPromise;
+          showToast('已收到插座蓝牙数据包！请查看底部调试面板');
+
+          if (server.connected) {
+            server.disconnect();
+          }
+        } catch (err) {
+          const message = err && err.message ? err.message : String(err);
+          addLog('ERROR', `蓝牙读取失败: ${message}`);
+          showToast(`蓝牙读取失败: ${message}`);
+        }
+      }
+
+      // Tab Switching
+      document.querySelectorAll('.nav-tab').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const tab = btn.dataset.tab;
+          document.querySelectorAll('.tab-view').forEach(v => v.classList.remove('active'));
+          document.getElementById(`view-${tab}`).classList.add('active');
+
+          document.querySelectorAll('.nav-tab').forEach(b => {
+            b.classList.remove('text-emerald-600', 'font-semibold');
+            b.classList.add('text-neutral-500');
+          });
+          btn.classList.remove('text-neutral-500');
+          btn.classList.add('text-emerald-600', 'font-semibold');
+
+          if (tab === 'stats') {
+            renderStats();
+          }
+        });
+      });
+
+      // QR Parser
+      document.getElementById('btnParseQr').addEventListener('click', () => {
+        const raw = document.getElementById('qrUrlInput').value.trim();
+        if (!raw) {
+          showToast('请先粘贴二维码链接');
+          return;
+        }
+        try {
+          const queryPart = raw.includes('?') ? raw.split('?')[1] : raw;
+          const pair = queryPart.split('&')[0];
+          if (pair && pair.includes('=')) {
+            const [sn, pin] = pair.split('=');
+            document.getElementById('devSn').value = decodeURIComponent(sn).trim();
+            document.getElementById('devPin').value = decodeURIComponent(pin).trim();
+            showToast('已解析出序列号与 PIN');
+          } else {
+            showToast('未识别到 ?序列号=PIN 格式');
+          }
+        } catch (e) {
+          showToast('二维码链接解析失败');
+        }
+      });
+
+      // Open Add Device Modal
+      function openDeviceModal(dev) {
+        const modal = document.getElementById('deviceModal');
+        document.getElementById('deviceModalTitle').textContent = dev ? '编辑蓝牙插座' : '添加蓝牙插座';
+        document.getElementById('editDeviceId').value = dev ? dev.id : '';
+        document.getElementById('devName').value = dev ? dev.name : '';
+        document.getElementById('devGroup').value = dev ? (dev.group || '') : '';
+        document.getElementById('devSn').value = dev ? (dev.sn || '') : '';
+        document.getElementById('devPin').value = dev ? (dev.pin || '') : '';
+        document.getElementById('devStrategy').value = dev ? dev.strategy : 'anchor';
+        document.getElementById('devEnabled').checked = dev ? dev.enabled : true;
+        document.getElementById('qrUrlInput').value = '';
+        modal.classList.remove('hidden');
+      }
+
+      document.getElementById('btnAddDeviceTop').addEventListener('click', () => openDeviceModal(null));
+      document.getElementById('btnCloseDeviceModal').addEventListener('click', () => {
+        document.getElementById('deviceModal').classList.add('hidden');
+      });
+
+      document.getElementById('deviceForm').addEventListener('submit', (e) => {
+        e.preventDefault();
+        const id = document.getElementById('editDeviceId').value;
+        const payload = {
+          id: id || `dev_${Date.now()}`,
+          name: document.getElementById('devName').value.trim(),
+          group: document.getElementById('devGroup').value.trim(),
+          model: 'YM-S1-BES',
+          sn: document.getElementById('devSn').value.trim(),
+          pin: document.getElementById('devPin').value.trim(),
+          strategy: document.getElementById('devStrategy').value,
+          enabled: document.getElementById('devEnabled').checked
+        };
+
+        if (id) {
+          const idx = state.devices.findIndex(d => d.id === id);
+          if (idx >= 0) state.devices[idx] = { ...state.devices[idx], ...payload };
+          addLog('INFO', `更新插座配置: ${payload.name}`);
+        } else {
+          state.isDemo = false;
+          state.devices.push(payload);
+          addLog('INFO', `新增插座: ${payload.name} (S/N: ${payload.sn || '未填'})`);
+        }
+
+        saveState();
+        document.getElementById('deviceModal').classList.add('hidden');
+        renderAll();
+        showToast('插座已保存');
+      });
+
+      // Open Manual Reading Modal
+      function openReadingModal(deviceId) {
+        const dev = state.devices.find(d => d.id === deviceId);
+        if (!dev) return;
+        document.getElementById('readingDeviceId').value = dev.id;
+        document.getElementById('readingDeviceSubtitle').textContent = `${dev.name} (${dev.sn || 'YM-S1-BES'})`;
+
+        const latest = state.readings
+          .filter(r => r.deviceId === dev.id)
+          .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))[0];
+        document.getElementById('readKwh').value = latest ? (latest.kwh + 0.5).toFixed(2) : '';
+        document.getElementById('readPower').value = latest && latest.power != null ? latest.power : '';
+        document.getElementById('readVoltage').value = latest && latest.voltage != null ? latest.voltage : '220.0';
+        document.getElementById('readCurrent').value = latest && latest.current != null ? latest.current : '';
+
+        const now = new Date();
+        now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
+        document.getElementById('readTime').value = now.toISOString().slice(0, 16);
+
+        document.getElementById('readingModal').classList.remove('hidden');
+      }
+
+      document.getElementById('btnCloseReadingModal').addEventListener('click', () => {
+        document.getElementById('readingModal').classList.add('hidden');
+      });
+
+      document.getElementById('readingForm').addEventListener('submit', (e) => {
+        e.preventDefault();
+        const deviceId = document.getElementById('readingDeviceId').value;
+        const kwh = parseFloat(document.getElementById('readKwh').value);
+        const powerVal = document.getElementById('readPower').value;
+        const voltageVal = document.getElementById('readVoltage').value;
+        const currentVal = document.getElementById('readCurrent').value;
+        const timeVal = document.getElementById('readTime').value;
+
+        if (!Number.isFinite(kwh) || kwh < 0) {
+          showToast('请输入有效的累计电量');
+          return;
+        }
+
+        state.isDemo = false;
+        state.readings.push({
+          id: `r_${Date.now()}`,
+          deviceId,
+          timestamp: new Date(timeVal).toISOString(),
+          kwh,
+          power: powerVal !== '' ? parseFloat(powerVal) : null,
+          voltage: voltageVal !== '' ? parseFloat(voltageVal) : null,
+          current: currentVal !== '' ? parseFloat(currentVal) : null
+        });
+
+        saveState();
+        document.getElementById('readingModal').classList.add('hidden');
+        addLog('INFO', `手动录入读数: ${kwh.toFixed(2)} kWh`);
+        renderAll();
+        showToast('读数已记录');
+      });
+
+      // Delegated clicks on device list
+      document.getElementById('deviceList').addEventListener('click', (e) => {
+        const btn = e.target.closest('button[data-action]');
+        if (!btn) return;
+        const action = btn.dataset.action;
+        const id = btn.dataset.id;
+        const dev = state.devices.find(d => d.id === id);
+
+        if (action === 'edit-device' && dev) {
+          openDeviceModal(dev);
+        } else if (action === 'delete-device' && dev) {
+          state.devices = state.devices.filter(d => d.id !== id);
+          state.readings = state.readings.filter(r => r.deviceId !== id);
+          state.isDemo = false;
+          saveState();
+          addLog('INFO', `已删除插座: ${dev.name}`);
+          renderAll();
+          showToast('插座已删除');
+        } else if (action === 'manual-read') {
+          openReadingModal(id);
+        } else if (action === 'ble-read') {
+          connectAndReadBle(dev);
+        }
+      });
+
+      // Standalone BLE scan button
+      document.getElementById('btnScanStandalone').addEventListener('click', () => {
+        connectAndReadBle(null);
+      });
+
+      // Copy packet button
+      document.getElementById('btnCopyPacket').addEventListener('click', async () => {
+        const text = lastRawHex
+          ? `RAW: ${lastRawHex}\nXOR_F0: ${lastDecodedHex}`
+          : '尚未收到蓝牙数据包';
+        try {
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            await navigator.clipboard.writeText(text);
+          } else {
+            const ta = document.createElement('textarea');
+            ta.value = text;
+            document.body.appendChild(ta);
+            ta.select();
+            document.execCommand('copy');
+            document.body.removeChild(ta);
+          }
+          showToast('已复制数据包信息');
+        } catch (err) {
+          showToast('复制失败，请长按文本复制');
+        }
+      });
+
+      // Stats controls
+      document.getElementById('btnModeDaily').addEventListener('click', () => {
+        state.statsMode = 'daily';
+        saveState();
+        renderStats();
+      });
+      document.getElementById('btnModeMonthly').addEventListener('click', () => {
+        state.statsMode = 'monthly';
+        saveState();
+        renderStats();
+      });
+      document.getElementById('rateInput').addEventListener('input', (e) => {
+        const val = parseFloat(e.target.value);
+        if (Number.isFinite(val) && val >= 0) {
+          state.rate = val;
+          saveState();
+          renderKPIs();
+          renderStats();
+        }
+      });
+      document.getElementById('statsDeviceFilter').addEventListener('change', (e) => {
+        state.statsDeviceId = e.target.value;
+        saveState();
+        renderStats();
+      });
+
+      // Demo & Backup controls
+      document.getElementById('btnClearDemo').addEventListener('click', () => {
+        state.isDemo = false;
+        state.devices = [];
+        state.readings = [];
+        saveState();
+        addLog('INFO', '已清空示例数据');
+        renderAll();
+        showToast('示例数据已清空');
+      });
+
+      document.getElementById('btnResetDemo').addEventListener('click', () => {
+        state = buildDemoState();
+        saveState();
+        renderAll();
+        showToast('已恢复示例数据');
+      });
+
+      document.getElementById('btnClearLogs').addEventListener('click', () => {
+        state.logs = [];
+        saveState();
+        renderLogs();
+      });
+
+      document.getElementById('btnExportJson').addEventListener('click', () => {
+        const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `ble-power-backup-${new Date().toISOString().slice(0, 10)}.json`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        showToast('已导出 JSON 备份');
+      });
+
+      document.getElementById('inputImportJson').addEventListener('change', (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = () => {
+          try {
+            const parsed = JSON.parse(reader.result);
+            if (parsed && Array.isArray(parsed.devices) && Array.isArray(parsed.readings)) {
+              state = parsed;
+              saveState();
+              renderAll();
+              showToast('备份导入成功');
+            } else {
+              showToast('JSON 格式不匹配');
+            }
+          } catch (err) {
+            showToast('解析备份文件失败');
+          }
+        };
+        reader.readAsText(file);
+        e.target.value = '';
+      });
+
+      // Init
+      checkBleSupport();
+      renderAll();
+    })();
+  </script>
+</body>
+</html>
