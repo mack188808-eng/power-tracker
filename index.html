@@ -875,8 +875,20 @@
           const server = await device.gatt.connect();
           addLog('BLE', 'GATT 连接成功，正在获取服务...');
           const service = await server.getPrimaryService(BLE_SERVICE_UUID);
-          const notifyChar = await service.getCharacteristic(BLE_NOTIFY_UUID);
-          const writeChar = await service.getCharacteristic(BLE_WRITE_UUID);
+          const chars = await service.getCharacteristics();
+          addLog('BLE', `发现 ${chars.length} 个特征值: ` + chars.map(c => c.uuid).join(', '));
+
+          const notifyChar =
+            chars.find(c => c.uuid.startsWith('49535343-1e4d-') && (c.properties.notify || c.properties.indicate)) ||
+            chars.find(c => c.properties.notify || c.properties.indicate);
+          const writeChar =
+            chars.find(c => c.uuid.startsWith('49535343-8841-') && (c.properties.write || c.properties.writeWithoutResponse)) ||
+            chars.find(c => c.properties.write || c.properties.writeWithoutResponse);
+
+          if (!notifyChar || !writeChar) {
+            throw new Error('未在插座服务中找到可用的通知或写入特征值');
+          }
+          addLog('BLE', `使用通知特征值: ${notifyChar.uuid} | 写入特征值: ${writeChar.uuid}`);
 
           await notifyChar.startNotifications();
           addLog('BLE', '已订阅通知特征值，准备发送读取指令...');
@@ -908,7 +920,11 @@
             notifyChar.addEventListener('characteristicvaluechanged', onNotify);
           });
 
-          await writeChar.writeValue(READ_COMMAND);
+          if (writeChar.properties.writeWithoutResponse && !writeChar.properties.write && writeChar.writeValueWithoutResponse) {
+            await writeChar.writeValueWithoutResponse(READ_COMMAND);
+          } else {
+            await writeChar.writeValue(READ_COMMAND);
+          }
           addLog('BLE', `已写入读取指令: ${toHex(READ_COMMAND)}`);
 
           await packetPromise;
