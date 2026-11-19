@@ -1115,16 +1115,16 @@
         return Array.from(bytes).map(b => b.toString(16).padStart(2, '0').toUpperCase()).join(' ');
       }
 
-      async function connectAndReadBle(targetDevice) {
+      async function connectAndReadBle(targetDevice, silentOnly = false) {
         if (!navigator.bluetooth) {
-          showToast('当前浏览器不支持网页蓝牙，请使用安卓 Chrome 或 iOS Bluefy');
+          showToast('当前浏览器不支持网页蓝牙，请使用安卓 Chrome/Edge 或 iOS Bluefy');
           addLog('ERROR', '浏览器不支持 navigator.bluetooth');
-          return;
+          return false;
         }
 
+        let server = null;
         try {
           let device = null;
-          let server = null;
 
           // Try silent reconnect via getDevices() if already paired
           if (targetDevice && typeof navigator.bluetooth.getDevices === 'function' && (targetDevice.bleDeviceId || targetDevice.bleName)) {
@@ -1135,18 +1135,23 @@
                 (targetDevice.bleName && d.name === targetDevice.bleName)
               );
               if (matched) {
-                addLog('BLE', `尝试免弹窗直连已配对设备: ${matched.name || matched.id}`);
+                addLog('BLE', `免弹窗直连已配对设备: ${matched.name || matched.id}`);
                 device = matched;
                 server = await device.gatt.connect();
+              } else {
+                addLog('BLE', `已授权列表(${known.length}个)中未找到 ${targetDevice.name}`);
               }
             } catch (reconnErr) {
-              addLog('BLE', `免弹窗直连未就绪，转入蓝牙选择框...`);
+              addLog('BLE', `免弹窗直连失败，准备弹窗重选...`);
               device = null;
               server = null;
             }
           }
 
           if (!device) {
+            if (silentOnly) {
+              return 'needs_pair';
+            }
             addLog('BLE', `正在扫描蓝牙插座 (${targetDevice ? targetDevice.name : '快速扫描'})...`);
             const reqOpts = (targetDevice && targetDevice.bleName)
               ? { filters: [{ name: targetDevice.bleName }], optionalServices: [BLE_SERVICE_UUID] }
@@ -1172,6 +1177,7 @@
             if (device.name) targetDevice.bleName = device.name;
             saveState();
           }
+
           const service = await server.getPrimaryService(BLE_SERVICE_UUID);
           const chars = await service.getCharacteristics();
 
@@ -1187,6 +1193,8 @@
           }
 
           await notifyChar.startNotifications();
+          // Give BLE UART bridge 200ms to settle after enabling CCCD notifications
+          await new Promise(r => setTimeout(r, 200));
 
           const writeCmd = async (cmd) => {
             if (writeChar.properties.writeWithoutResponse && !writeChar.properties.write && writeChar.writeValueWithoutResponse) {
@@ -1236,19 +1244,32 @@
           const preferred = targetDevice && targetDevice.protocol ? targetDevice.protocol : 'auto';
           if (preferred === 'B') {
             await writeCmd(CMD_PROTO_B);
-            rawBytes = await waitReply(18, 3500);
+            rawBytes = await waitReply(18, 2500);
+            if (!rawBytes) {
+              addLog('BLE', '首次无响应，自动重试协议 B...');
+              await writeCmd(CMD_PROTO_B);
+              rawBytes = await waitReply(18, 3000);
+            }
+          } else if (preferred === 'A') {
+            await writeCmd(CMD_PROTO_A);
+            rawBytes = await waitReply(38, 2500);
+            if (!rawBytes) {
+              addLog('BLE', '首次无响应，自动重试协议 A...');
+              await writeCmd(CMD_PROTO_A);
+              rawBytes = await waitReply(38, 3000);
+            }
           } else {
             await writeCmd(CMD_PROTO_A);
             rawBytes = await waitReply(38, 2500);
             if (!rawBytes) {
               addLog('BLE', '协议 A 无响应，自动切换协议 B...');
               await writeCmd(CMD_PROTO_B);
-              rawBytes = await waitReply(18, 3500);
+              rawBytes = await waitReply(18, 3000);
             }
           }
 
           if (!rawBytes) {
-            throw new Error('读取通知超时，请确认微信后台未占用插座连接');
+            throw new Error('插座未返回数据，请确认蓝牙信号良好或插座未被其他设备占用');
           }
 
           let parsed = null;
@@ -1322,14 +1343,16 @@
           } else {
             showToast('已收到数据包，请在调试面板查看');
           }
-
-          if (server.connected) {
-            server.disconnect();
-          }
+          return true;
         } catch (err) {
           const message = err && err.message ? err.message : String(err);
           addLog('ERROR', `蓝牙读取失败: ${message}`);
           showToast(`蓝牙读取失败: ${message}`);
+          return false;
+        } finally {
+          if (server && server.connected) {
+            try { server.disconnect(); } catch (e) {}
+          }
         }
       }
 
@@ -1545,8 +1568,19 @@
           showToast('没有已启用的插座');
           return;
         }
+        let okCount = 0;
+        let needPairNames = [];
         for (const dev of enabled) {
-          await connectAndReadBle(dev);
+          // If first device isn't paired yet, allow interactive prompt once; subsequent un-paired devices cannot pop up without user gesture
+          const allowPrompt = (needPairNames.length === 0 && okCount === 0);
+          const res = await connectAndReadBle(dev, !allowPrompt);
+          if (res === true) okCount++;
+          else if (res === 'needs_pair') needPairNames.push(dev.name);
+        }
+        if (needPairNames.length > 0) {
+          showToast(`已完成 ${okCount} 台；「${needPairNames.join('、')}」需先单独点一次蓝牙读取完成首次配对`);
+        } else if (okCount > 0) {
+          showToast(`全部读取完成，共更新 ${okCount} 台插座`);
         }
       });
 
