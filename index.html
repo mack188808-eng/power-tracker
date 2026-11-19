@@ -209,6 +209,9 @@
           <button id="btnClearDemo" type="button" class="hidden btn-press text-[11px] px-2.5 py-1 rounded-full bg-amber-500/12 text-amber-700 font-medium">
             清空示例
           </button>
+          <button id="btnReadAll" type="button" class="btn-press text-[11px] px-3 py-1 rounded-full bg-emerald-600 text-white font-medium shadow-xs">
+            一键全部读取
+          </button>
           <button id="btnScanStandalone" type="button" class="btn-press text-[11px] px-3 py-1 rounded-full theme-pill hover:bg-black/10 t-primary font-medium">
             快速扫描
           </button>
@@ -1120,14 +1123,55 @@
         }
 
         try {
-          addLog('BLE', `正在扫描蓝牙插座 (${targetDevice ? targetDevice.name : '快速扫描'})...`);
-          const device = await navigator.bluetooth.requestDevice({
-            acceptAllDevices: true,
-            optionalServices: [BLE_SERVICE_UUID]
-          });
-          addLog('BLE', `已选择设备: ${device.name || '未命名设备'}`);
+          let device = null;
+          let server = null;
 
-          const server = await device.gatt.connect();
+          // Try silent reconnect via getDevices() if already paired
+          if (targetDevice && typeof navigator.bluetooth.getDevices === 'function' && (targetDevice.bleDeviceId || targetDevice.bleName)) {
+            try {
+              const known = await navigator.bluetooth.getDevices();
+              const matched = known.find(d =>
+                (targetDevice.bleDeviceId && d.id === targetDevice.bleDeviceId) ||
+                (targetDevice.bleName && d.name === targetDevice.bleName)
+              );
+              if (matched) {
+                addLog('BLE', `尝试免弹窗直连已配对设备: ${matched.name || matched.id}`);
+                device = matched;
+                server = await device.gatt.connect();
+              }
+            } catch (reconnErr) {
+              addLog('BLE', `免弹窗直连未就绪，转入蓝牙选择框...`);
+              device = null;
+              server = null;
+            }
+          }
+
+          if (!device) {
+            addLog('BLE', `正在扫描蓝牙插座 (${targetDevice ? targetDevice.name : '快速扫描'})...`);
+            const reqOpts = (targetDevice && targetDevice.bleName)
+              ? { filters: [{ name: targetDevice.bleName }], optionalServices: [BLE_SERVICE_UUID] }
+              : { filters: [{ services: [BLE_SERVICE_UUID] }], optionalServices: [BLE_SERVICE_UUID] };
+            try {
+              device = await navigator.bluetooth.requestDevice(reqOpts);
+            } catch (filterErr) {
+              if (filterErr && filterErr.name === 'NotFoundError') {
+                device = await navigator.bluetooth.requestDevice({
+                  acceptAllDevices: true,
+                  optionalServices: [BLE_SERVICE_UUID]
+                });
+              } else {
+                throw filterErr;
+              }
+            }
+            addLog('BLE', `已选择设备: ${device.name || '未命名设备'}`);
+            server = await device.gatt.connect();
+          }
+
+          if (targetDevice) {
+            targetDevice.bleDeviceId = device.id;
+            if (device.name) targetDevice.bleName = device.name;
+            saveState();
+          }
           const service = await server.getPrimaryService(BLE_SERVICE_UUID);
           const chars = await service.getCharacteristics();
 
@@ -1493,6 +1537,17 @@
         saveState();
         renderAll();
         showToast('已删除该条读数');
+      });
+
+      document.getElementById('btnReadAll').addEventListener('click', async () => {
+        const enabled = state.devices.filter(d => d.enabled);
+        if (enabled.length === 0) {
+          showToast('没有已启用的插座');
+          return;
+        }
+        for (const dev of enabled) {
+          await connectAndReadBle(dev);
+        }
       });
 
       document.getElementById('btnScanStandalone').addEventListener('click', () => {
