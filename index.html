@@ -397,7 +397,8 @@
       const BLE_SERVICE_UUID = '49535343-fe7d-4ae5-8fa9-9fafd205e455';
       const BLE_NOTIFY_UUID = '49535343-1e4d-bd9-ba61-23c647249616';
       const BLE_WRITE_UUID = '49535343-8841-43f4-a8d4-ecbe34729bb3';
-      const READ_COMMAND = new Uint8Array([0xAB, 0xAA, 0x47, 0x44, 0x9D, 0x95, 0x9D, 0x46, 0x17]);
+      const CMD_PROTO_A = new Uint8Array([0xAB, 0xAA, 0x47, 0x44, 0x9D, 0x95, 0x9D, 0x46, 0x17]);
+      const CMD_PROTO_B = new Uint8Array([0xA2, 0xA3, 0xA2]);
 
       let kwhChartInstance = null;
       let costChartInstance = null;
@@ -900,7 +901,16 @@
           await notifyChar.startNotifications();
           addLog('BLE', '已订阅通知特征值，准备发送读取指令...');
 
-          const packetPromise = new Promise((resolve, reject) => {
+          const writeCmd = async (cmd) => {
+            if (writeChar.properties.writeWithoutResponse && !writeChar.properties.write && writeChar.writeValueWithoutResponse) {
+              await writeChar.writeValueWithoutResponse(cmd);
+            } else {
+              await writeChar.writeValue(cmd);
+            }
+            addLog('BLE', `已写入读取指令: ${toHex(cmd)}`);
+          };
+
+          const waitReply = (expectedLen, timeoutMs) => new Promise((resolve) => {
             let chunks = [];
             let totalLen = 0;
             const timer = setTimeout(() => {
@@ -911,9 +921,9 @@
                 for (const c of chunks) { merged.set(c, pos); pos += c.length; }
                 resolve(merged);
               } else {
-                reject(new Error('读取通知超时（6秒），请确认手机微信小程序未占用插座连接'));
+                resolve(null);
               }
-            }, 6000);
+            }, timeoutMs);
 
             function onNotify(event) {
               const value = event.target.value;
@@ -922,7 +932,8 @@
               totalLen += part.length;
               addLog('BLE', `收到分包 (${part.length}B): ${toHex(part)}`);
 
-              if (totalLen >= 38) {
+              const isProtoB = totalLen >= 18 && ((chunks[0][0] ^ 0x8C) === 0x01) && ((chunks[0][1] ^ 0x8C) === 0x0F);
+              if (totalLen >= expectedLen || isProtoB) {
                 clearTimeout(timer);
                 notifyChar.removeEventListener('characteristicvaluechanged', onNotify);
                 const merged = new Uint8Array(totalLen);
@@ -934,48 +945,78 @@
             notifyChar.addEventListener('characteristicvaluechanged', onNotify);
           });
 
-          if (writeChar.properties.writeWithoutResponse && !writeChar.properties.write && writeChar.writeValueWithoutResponse) {
-            await writeChar.writeValueWithoutResponse(READ_COMMAND);
+          let rawBytes = null;
+          const preferred = targetDevice && targetDevice.protocol ? targetDevice.protocol : 'auto';
+          if (preferred === 'B') {
+            await writeCmd(CMD_PROTO_B);
+            rawBytes = await waitReply(18, 3500);
           } else {
-            await writeChar.writeValue(READ_COMMAND);
+            await writeCmd(CMD_PROTO_A);
+            rawBytes = await waitReply(38, 2500);
+            if (!rawBytes) {
+              addLog('BLE', '协议 A 无响应，自动切换协议 B (A2 A3 A2)...');
+              await writeCmd(CMD_PROTO_B);
+              rawBytes = await waitReply(18, 3500);
+            }
           }
-          addLog('BLE', `已写入读取指令: ${toHex(READ_COMMAND)}`);
 
-          const rawBytes = await packetPromise;
-          const decodedBytes = rawBytes.map(b => b ^ 0x56);
+          if (!rawBytes) {
+            throw new Error('读取通知超时，请确认手机微信小程序未占用插座连接');
+          }
+
+          let parsed = null;
+          let decodedBytes = null;
+          if (rawBytes.length >= 22 && ((rawBytes[0] ^ 0x56) === 0xFD) && ((rawBytes[1] ^ 0x56) === 0xFC)) {
+            decodedBytes = rawBytes.map(b => b ^ 0x56);
+            parsed = {
+              proto: 'A',
+              kwh: (((decodedBytes[7] << 24) | (decodedBytes[8] << 16) | (decodedBytes[9] << 8) | decodedBytes[10]) >>> 0) / 100,
+              power: ((decodedBytes[15] << 8) | decodedBytes[16]) / 10,
+              voltage: ((decodedBytes[17] << 8) | decodedBytes[18]) / 10,
+              current: ((decodedBytes[19] << 8) | decodedBytes[20]) / 1000,
+              pf: decodedBytes[21] / 100
+            };
+          } else if (rawBytes.length >= 17 && ((rawBytes[0] ^ 0x8C) === 0x01) && ((rawBytes[1] ^ 0x8C) === 0x0F)) {
+            decodedBytes = rawBytes.map(b => b ^ 0x8C);
+            parsed = {
+              proto: 'B',
+              kwh: (((decodedBytes[2] << 24) | (decodedBytes[3] << 16) | (decodedBytes[4] << 8) | decodedBytes[5]) >>> 0) / 100,
+              power: ((decodedBytes[10] << 8) | decodedBytes[11]) / 10,
+              voltage: ((decodedBytes[12] << 8) | decodedBytes[13]) / 10,
+              current: ((decodedBytes[14] << 8) | decodedBytes[15]) / 1000,
+              pf: decodedBytes[16] / 100
+            };
+          } else {
+            decodedBytes = rawBytes.map(b => b ^ 0x56);
+          }
 
           lastRawHex = toHex(rawBytes);
           lastDecodedHex = toHex(decodedBytes);
 
           document.getElementById('rawHexOutput').textContent = lastRawHex;
           document.getElementById('decodedHexOutput').textContent = lastDecodedHex;
-          addLog('BLE', `XOR 0x56 解码 (${decodedBytes.length}B): ${lastDecodedHex}`);
+          addLog('BLE', `解码完成 (${decodedBytes.length}B): ${lastDecodedHex}`);
 
-          if (decodedBytes.length >= 22 && decodedBytes[0] === 0xFD && decodedBytes[1] === 0xFC) {
-            const kwh = (((decodedBytes[7] << 24) | (decodedBytes[8] << 16) | (decodedBytes[9] << 8) | decodedBytes[10]) >>> 0) / 100;
-            const power = ((decodedBytes[15] << 8) | decodedBytes[16]) / 10;
-            const voltage = ((decodedBytes[17] << 8) | decodedBytes[18]) / 10;
-            const current = ((decodedBytes[19] << 8) | decodedBytes[20]) / 1000;
-            const pf = decodedBytes[21] / 100;
-
-            addLog('BLE', `解析成功 -> 电量: ${kwh.toFixed(2)} kWh, 功率: ${power.toFixed(1)} W, 电压: ${voltage.toFixed(1)} V, 电流: ${current.toFixed(3)} A, PF: ${pf.toFixed(2)}`);
+          if (parsed) {
+            addLog('BLE', `[协议 ${parsed.proto}] 电量: ${parsed.kwh.toFixed(2)} kWh, 功率: ${parsed.power.toFixed(1)} W, 电压: ${parsed.voltage.toFixed(1)} V, 电流: ${parsed.current.toFixed(3)} A, PF: ${parsed.pf.toFixed(2)}`);
 
             if (targetDevice) {
+              targetDevice.protocol = parsed.proto;
               state.isDemo = false;
               state.readings.push({
                 id: `r_${Date.now()}`,
                 deviceId: targetDevice.id,
                 timestamp: new Date().toISOString(),
-                kwh,
-                power,
-                voltage,
-                current
+                kwh: parsed.kwh,
+                power: parsed.power,
+                voltage: parsed.voltage,
+                current: parsed.current
               });
               saveState();
               renderAll();
-              showToast(`读取成功！${kwh.toFixed(2)} kWh · ${power.toFixed(1)} W`);
+              showToast(`读取成功！${parsed.kwh.toFixed(2)} kWh · ${parsed.power.toFixed(1)} W`);
             } else {
-              showToast(`解析成功: ${kwh.toFixed(2)} kWh · ${power.toFixed(1)} W · ${voltage.toFixed(1)} V`);
+              showToast(`解析成功: ${parsed.kwh.toFixed(2)} kWh · ${parsed.power.toFixed(1)} W · ${parsed.voltage.toFixed(1)} V`);
             }
           } else {
             showToast('已收到蓝牙数据包，请查看调试面板');
